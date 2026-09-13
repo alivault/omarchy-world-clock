@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui as Ui
 
@@ -8,11 +10,23 @@ Item {
   id: root
   required property var initialZones
   required property var choices
+  required property string scriptPath
+  property string hourFormat: "12h"
+  property bool startAdding: false
+  property bool adding: startAdding
   property string fontFamily: Style.font.family
   property bool saving: false
   property string errorText: ""
   property var draft: []
-  readonly property real cityRowHeight: Style.space(36)
+  readonly property real cityRowHeight: Style.space(76)
+  property real editScrollOffset: 0
+  property var details: ({})
+  property var requestedZones: []
+  property bool detailRefreshPending: false
+  property string detailError: ""
+  implicitHeight: header.implicitHeight + Style.space(10)
+    + (adding ? Style.space(350) : Math.max(1, draft.length) * cityRowHeight)
+    + (errorText || detailError ? Style.space(42) : 0)
   property int dragFrom: -1
   property int dropIndex: -1
   property real dragY: 0
@@ -26,14 +40,44 @@ Item {
   signal saveRequested(var cities)
   signal cancelRequested()
 
-  function focusSearch() { Qt.callLater(function() { search.forceActiveFocus() }) }
+  function focusInitial() {
+    Qt.callLater(function() {
+      if (root.adding) search.forceActiveFocus()
+      else header.focusPrimary()
+    })
+  }
+  function showSearch() {
+    if (saving || dragging) return
+    editScrollOffset = selected.contentY - selected.originY
+    adding = true
+    search.text = ""
+    focusInitial()
+  }
+  function backToEditor() {
+    adding = false
+    Qt.callLater(function() { restoreScrollOffset(editScrollOffset); header.focusPrimary() })
+  }
+  function cityKey(city) { return JSON.stringify([city.zone, city.label]) }
+  function refreshDetails() {
+    if (detailReader.running) { detailRefreshPending = true; return }
+    requestedZones = draft.slice()
+    detailReader.command = ["python3", scriptPath, JSON.stringify(requestedZones), hourFormat]
+    detailReader.running = true
+  }
+  onDraftChanged: Qt.callLater(refreshDetails)
+  onHourFormatChanged: Qt.callLater(refreshDetails)
   function includes(city) {
     return draft.some(function(entry) { return entry.zone === city.zone && entry.label === city.label })
   }
   function add(city) {
     if (saving || includes(city)) return
     draft = draft.concat([{ label: city.label, zone: city.zone }])
-    selected.positionViewAtEnd()
+    adding = false
+    Qt.callLater(function() {
+      selected.forceLayout()
+      selected.positionViewAtEnd()
+      header.focusPrimary()
+    })
   }
   function remove(index) {
     if (saving || dragging || index < 0 || index >= draft.length) return
@@ -80,7 +124,35 @@ Item {
   })
   Keys.onEscapePressed: {
     if (dragging) finishDrag(false)
+    else if (!saving && adding) backToEditor()
     else if (!saving) cancelRequested()
+  }
+
+  SystemClock {
+    precision: SystemClock.Minutes
+    onDateChanged: root.refreshDetails()
+  }
+  Process {
+    id: detailReader
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var rows = JSON.parse(text)
+          if (!Array.isArray(rows) || rows.length !== root.requestedZones.length) throw new Error("Invalid clock data")
+          var next = Object.assign({}, root.details)
+          for (var i = 0; i < rows.length; i++) next[root.cityKey(root.requestedZones[i])] = rows[i].detail
+          root.details = next
+          root.detailError = ""
+        } catch (error) { root.detailError = "Could not refresh time labels." }
+      }
+    }
+    onExited: function(code, status) {
+      if (code !== 0 || status !== 0) root.detailError = "Could not refresh time labels."
+      if (root.detailRefreshPending) {
+        root.detailRefreshPending = false
+        Qt.callLater(root.refreshDetails)
+      }
+    }
   }
 
   Timer {
@@ -102,19 +174,29 @@ Item {
     anchors.fill: parent
     spacing: Style.space(10)
 
-    Text {
-      text: "Edit cities"
-      color: Color.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.space(19)
-      font.bold: true
+    ClockHeader {
+      id: header
+      Layout.fillWidth: true
+      fontFamily: root.fontFamily
+      editing: true
+      adding: root.adding
+      busy: root.saving || root.dragging
+      onAddRequested: root.showSearch()
+      onDoneRequested: root.saveRequested(root.draft)
+      onBackRequested: root.backToEditor()
+      onDismissRequested: {
+        if (root.dragging) root.finishDrag(false)
+        else if (!root.saving && root.adding) root.backToEditor()
+        else if (!root.saving) root.cancelRequested()
+      }
     }
 
     ListView {
       id: selected
       readonly property real rowWidth: Math.max(0, width - selectedScroll.width - Style.space(6))
       Layout.fillWidth: true
-      Layout.preferredHeight: Math.max(root.cityRowHeight, Math.min(root.draft.length, 5) * root.cityRowHeight)
+      Layout.fillHeight: true
+      visible: !root.adding
       model: root.draft
       clip: true
       interactive: !root.dragging
@@ -129,7 +211,7 @@ Item {
       Text {
         anchors.centerIn: parent
         visible: !root.draft.length
-        text: "No cities yet — add one below"
+        text: "Use + to add a city"
         color: Color.foreground
         opacity: 0.55
         font.family: root.fontFamily
@@ -145,92 +227,67 @@ Item {
 
         RowLayout {
           anchors.fill: parent
-          spacing: Style.space(8)
+          spacing: Style.space(14)
           opacity: root.dragFrom === cityRow.index ? 0.3 : 1
-          Item {
-            id: handle
-            Layout.preferredWidth: Style.space(24)
-            Layout.fillHeight: true
-            activeFocusOnTab: true
-            enabled: !root.saving
-            Accessible.role: Accessible.Button
-            Accessible.name: "Reorder " + cityRow.modelData.label
-            Accessible.description: "Drag, or use Up and Down arrows to reorder"
-            Keys.onUpPressed: root.moveCity(cityRow.index, cityRow.index - 1, true)
-            Keys.onDownPressed: root.moveCity(cityRow.index, cityRow.index + 1, true)
-            Grid {
-              anchors.centerIn: parent
-              columns: 2
-              rowSpacing: Style.space(3)
-              columnSpacing: Style.space(3)
-              opacity: 0.45
-              Repeater {
-                model: 6
-                Rectangle {
-                  width: Style.space(2)
-                  height: width
-                  radius: width / 2
-                  color: Color.foreground
-                }
-              }
-            }
-            MouseArea {
-              id: dragArea
-              anchors.fill: parent
-              hoverEnabled: true
-              preventStealing: true
-              cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-              acceptedButtons: Qt.LeftButton
-              property real pressY: 0
-              onPressed: function(mouse) {
-                handle.forceActiveFocus()
-                pressY = mapToItem(selected, mouse.x, mouse.y).y
-              }
-              onPositionChanged: function(mouse) {
-                if (!pressed) return
-                var pointerY = mapToItem(selected, mouse.x, mouse.y).y
-                if (!root.dragging) {
-                  if (Math.abs(pointerY - pressY) < Style.space(4)) return
-                  root.dragFrom = cityRow.index
-                }
-                root.dragY = pointerY
-                root.updateDrop()
-              }
-              onReleased: function(mouse) {
-                if (!root.dragging) return
-                var point = mapToItem(selected, mouse.x, mouse.y)
-                root.finishDrag(point.x >= 0 && point.x <= selected.rowWidth
-                  && point.y >= 0 && point.y <= selected.height)
-              }
-              onCanceled: root.finishDrag(false)
-            }
-          }
-          Text {
-            Layout.fillWidth: true
-            text: cityRow.modelData.label
-            color: Color.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.space(14)
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-          }
           Ui.Button {
-            Layout.preferredWidth: Style.space(28)
-            Layout.preferredHeight: Style.space(28)
+            Layout.preferredWidth: Style.space(24)
+            Layout.preferredHeight: Style.space(24)
             Layout.fillWidth: false
             Layout.fillHeight: false
             Layout.alignment: Qt.AlignVCenter
-            borderSpec: Border.none()
-            color: hot || activeFocus ? Qt.alpha(foreground, 0.08) : "transparent"
-            text: "×"
-            tooltipText: "Remove " + cityRow.modelData.label
+            text: "−"
             fontSize: Style.space(20)
+            foreground: "white"
+            color: hot || activeFocus ? "#ff666b" : "#ff3b45"
+            radius: width / 2
+            borderSpec: Border.none()
             focusable: true
             enabled: !root.saving && !root.dragging
+            Accessible.name: "Remove " + cityRow.modelData.label
             onClicked: root.remove(cityRow.index)
+          }
+          Column {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            spacing: Style.space(4)
+            Text {
+              width: parent.width
+              text: root.details[root.cityKey(cityRow.modelData)] || "Reading time…"
+              color: Color.foreground
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.space(12)
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+            }
+            Text {
+              width: parent.width
+              text: cityRow.modelData.label
+              color: Color.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.space(24)
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+            }
+          }
+          ReorderGrip {
+            id: handle
+            Layout.preferredWidth: Style.space(28)
+            Layout.fillHeight: true
+            editor: root
+            listView: selected
+            rowIndex: cityRow.index
+            label: cityRow.modelData.label
           }
         }
 
+        Rectangle {
+          anchors.bottom: parent.bottom
+          width: parent.width
+          height: 1
+          color: Color.foreground
+          opacity: 0.14
+        }
         Rectangle {
           width: parent.width
           height: Style.space(2)
@@ -241,16 +298,10 @@ Item {
       }
     }
 
-    Rectangle {
-      Layout.fillWidth: true
-      implicitHeight: 1
-      color: Color.foreground
-      opacity: 0.12
-    }
-
     Ui.TextField {
       id: search
       Layout.fillWidth: true
+      visible: root.adding
       placeholderText: "Add city — search city or timezone…"
       font.family: root.fontFamily
       enabled: !root.saving
@@ -265,6 +316,7 @@ Item {
       readonly property real rowWidth: Math.max(0, width - matchesScroll.width - Style.space(6))
       Layout.fillWidth: true
       Layout.fillHeight: true
+      visible: root.adding
       model: root.results
       currentIndex: 0
       clip: true
@@ -340,8 +392,8 @@ Item {
 
     Text {
       Layout.fillWidth: true
-      visible: root.errorText !== ""
-      text: root.errorText
+      visible: root.errorText !== "" || root.detailError !== ""
+      text: root.errorText || root.detailError
       color: Color.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.space(12)
@@ -349,23 +401,6 @@ Item {
       textFormat: Text.PlainText
     }
 
-    RowLayout {
-      Layout.fillWidth: true
-      Item { Layout.fillWidth: true }
-      Ui.Button {
-        text: "Cancel"
-        focusable: true
-        enabled: !root.saving
-        onClicked: root.cancelRequested()
-      }
-      Ui.Button {
-        text: root.saving ? "Saving…" : "Save"
-        focusable: true
-        bordered: true
-        enabled: !root.saving && !root.dragging
-        onClicked: root.saveRequested(root.draft)
-      }
-    }
   }
 
   Rectangle {

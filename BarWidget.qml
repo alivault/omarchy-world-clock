@@ -25,6 +25,7 @@ Ui.BarWidget {
   property string editorError: ""
   property var pendingZones: []
   property string saveReply: ""
+  property bool editorStartsAdding: false
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -41,6 +42,7 @@ Ui.BarWidget {
     panelMode = "clocks"
     popup.controller.show()
     refresh()
+    Qt.callLater(function() { keys.forceActiveFocus() })
   }
   function close() { popup.close() }
   function closeForPopoutSwitch() { popup.closeForPopoutSwitch() }
@@ -49,13 +51,13 @@ Ui.BarWidget {
     if (opened && panelMode === "menu") { close(); return }
     panelMode = "menu"
     popup.controller.show()
-    Qt.callLater(function() { editButton.forceActiveFocus() })
+    Qt.callLater(function() { formatButton.forceActiveFocus() })
   }
-  function editCities() {
+  function editCities(addCity) {
     editorError = ""
+    editorStartsAdding = addCity === true
     panelMode = "edit"
     if (!catalog && !catalogReader.running) catalogReader.running = true
-    Qt.callLater(function() { if (editor.item) editor.item.focusSearch() })
   }
   function saveCities(cities) {
     if (saver.running) return
@@ -185,16 +187,20 @@ Ui.BarWidget {
       : Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
     contentWidth: fittedContentWidth(Style.space(root.panelMode === "menu" ? 232 : 390))
     contentHeight: fittedContentHeight(root.panelMode === "menu" ? menu.implicitHeight
-      : root.panelMode === "edit" ? Style.space(500)
-      : root.clocks.length > 0 && !root.errorText ? root.clocks.length * root.rowHeight : Style.space(76))
+      : root.panelMode === "edit" ? (editor.item ? editor.item.implicitHeight : Style.space(500))
+      : mainHeader.implicitHeight + (root.clocks.length > 0 && !root.errorText
+          ? root.clocks.length * root.rowHeight : Style.space(76)))
     focusTarget: keys
 
     Ui.PanelKeyCatcher {
       id: keys
       anchors.fill: parent
-      blocked: root.panelMode !== "clocks"
+      blocked: root.panelMode !== "clocks" || mainHeader.activeFocus
       onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTabRequested: function(direction) {
+        if (direction > 0) mainHeader.focusPrimary()
+        else root.switchPanel(direction)
+      }
       onMoveRequested: function(dx, dy) {
         list.contentY = Math.max(0, Math.min(Math.max(0, list.contentHeight - list.height), list.contentY + dy * root.rowHeight))
       }
@@ -206,16 +212,6 @@ Ui.BarWidget {
         visible: root.panelMode === "menu"
         Keys.onEscapePressed: root.close()
         GhostMenuButton {
-          id: editButton
-          width: parent.width
-          height: Style.space(30)
-          leftAlign: true
-          focusable: true
-          text: "Edit cities…"
-          onClicked: root.editCities()
-          Keys.onDownPressed: formatButton.forceActiveFocus()
-        }
-        GhostMenuButton {
           id: formatButton
           width: parent.width
           height: Style.space(30)
@@ -223,7 +219,6 @@ Ui.BarWidget {
           focusable: true
           text: root.hourFormat === "24h" ? "Use 12-hour time" : "Use 24-hour time"
           onClicked: root.toggleHourFormat()
-          Keys.onUpPressed: editButton.forceActiveFocus()
         }
       }
 
@@ -235,13 +230,16 @@ Ui.BarWidget {
         sourceComponent: CityEditor {
           initialZones: root.zones === null ? root.catalog.defaults : root.zones
           choices: root.catalog.choices
+          scriptPath: root.scriptPath
+          hourFormat: root.hourFormat
+          startAdding: root.editorStartsAdding
           saving: saver.running
           errorText: root.editorError
           fontFamily: root.uiFont
           onSaveRequested: function(cities) { root.saveCities(cities) }
           onCancelRequested: root.open()
         }
-        onLoaded: item.focusSearch()
+        onLoaded: item.focusInitial()
       }
 
       Text {
@@ -255,8 +253,22 @@ Ui.BarWidget {
         textFormat: Text.PlainText
       }
 
+      ClockHeader {
+        id: mainHeader
+        anchors.top: parent.top
+        width: parent.width
+        visible: root.panelMode === "clocks"
+        fontFamily: root.uiFont
+        onEditRequested: root.editCities(false)
+        onAddRequested: root.editCities(true)
+        onDismissRequested: root.close()
+      }
+
       Text {
-        anchors.fill: parent
+        anchors.top: mainHeader.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
         visible: root.panelMode === "clocks" && (root.errorText !== "" || root.clocks.length === 0)
         text: root.errorText || (reader.running ? "Reading clocks…" : "No cities configured")
         color: root.foreground
@@ -269,7 +281,10 @@ Ui.BarWidget {
 
       ListView {
         id: list
-        anchors.fill: parent
+        anchors.top: mainHeader.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
         visible: root.panelMode === "clocks" && root.errorText === ""
         model: root.clocks
         clip: true

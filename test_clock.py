@@ -19,6 +19,16 @@ class ClockTests(unittest.TestCase):
         self.assertEqual([row["label"] for row in clocks()],
                          ["New York", "London", "Bergen", "Istanbul", "Tokyo"])
 
+    def test_edit_rows_keep_details_with_their_cities_after_reordering(self):
+        zones = [{"label": "Tokyo", "zone": "Asia/Tokyo"},
+                 {"label": "New York", "zone": "America/New_York"}]
+        now = datetime(2026, 1, 1, 22, 0, tzinfo=timezone.utc)
+        rows = clocks(zones, now=now, home_zone="UTC")
+        reordered = clocks(list(reversed(zones)), now=now, home_zone="UTC")
+        self.assertEqual(reordered, list(reversed(rows)))
+        self.assertEqual(rows[0]["detail"], "Tomorrow, +9 HRS")
+        self.assertEqual(rows[1]["detail"], "Today, −5 HRS")
+
     def test_midnight_and_fractional_offsets(self):
         now = datetime(2026, 1, 1, 23, 45, tzinfo=timezone.utc)
         rows = clocks([{"label": "Mumbai", "zone": "Asia/Kolkata"},
