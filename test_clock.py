@@ -1,10 +1,20 @@
 import unittest
 from datetime import datetime, timezone
 
-from clock import clocks, offset_label
+from clock import clocks, offset_label, city_catalog, DEFAULT_ZONES
 
 
 class ClockTests(unittest.TestCase):
+    def test_offline_catalog(self):
+        catalog = city_catalog()
+        self.assertEqual(catalog["defaults"], DEFAULT_ZONES)
+        self.assertIn({"label": "New York", "zone": "America/New_York"}, catalog["choices"])
+        self.assertIn({"label": "Bergen", "zone": "Europe/Oslo"}, catalog["choices"])
+        self.assertIn({"label": "Home", "zone": ""}, catalog["choices"])
+        self.assertGreater(len(catalog["choices"]), 100)
+        self.assertEqual(catalog["choices"], sorted(catalog["choices"], key=lambda city: (city["label"].casefold(), city["zone"])))
+        self.assertEqual(len(catalog["choices"]), len({(city["label"], city["zone"]) for city in catalog["choices"]}))
+
     def test_default_cities(self):
         self.assertEqual([row["label"] for row in clocks()],
                          ["New York", "London", "Bergen", "Istanbul", "Tokyo"])

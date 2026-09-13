@@ -20,21 +20,60 @@ Ui.BarWidget {
   property var clocks: []
   property string errorText: ""
   property bool refreshPending: false
+  property string panelMode: "clocks"
+  property var catalog: null
+  property string editorError: ""
+  property var pendingZones: []
+  property string saveReply: ""
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  component GhostMenuButton: Ui.Button {
+    borderSpec: Border.none()
+    color: hot || activeFocus ? Qt.alpha(foreground, 0.08) : "transparent"
+    fontSize: Style.font.bodySmall
+    // Ui.Button reserves a focus border even when our ghost border is hidden.
+    leftPadding: Style.space(28) - _reservedBorderLeft
+  }
+
   function open() {
+    panelMode = "clocks"
     popup.controller.show()
     refresh()
   }
   function close() { popup.close() }
   function closeForPopoutSwitch() { popup.closeForPopoutSwitch() }
   function toggle() { opened ? close() : open() }
+  function showMenu() {
+    if (opened && panelMode === "menu") { close(); return }
+    panelMode = "menu"
+    popup.controller.show()
+    Qt.callLater(function() { editButton.forceActiveFocus() })
+  }
+  function editCities() {
+    editorError = ""
+    panelMode = "edit"
+    if (!catalog && !catalogReader.running) catalogReader.running = true
+    Qt.callLater(function() { if (editor.item) editor.item.focusSearch() })
+  }
+  function saveCities(cities) {
+    if (saver.running) return
+    editorError = ""
+    saveReply = ""
+    pendingZones = cities.slice()
+    // Quickshell's CLI expands a bare [...] argument into multiple arguments.
+    // Leading JSON whitespace prevents that expansion without changing data.
+    // Use the same settings IPC as `omarchy bar set`, with separate argv entries.
+    saver.command = ["omarchy-shell", "shell", "setBarWidget", root.moduleName,
+      "zones", " " + JSON.stringify(pendingZones), "{}"]
+    saver.running = true
+  }
   function toggleHourFormat() {
     if (!bar) return
     var nextFormat = hourFormat === "24h" ? "12h" : "24h"
     bar.run("omarchy bar set ali.world-clock hourFormat " + nextFormat)
+    open()
   }
   function switchPanel(direction) {
     return bar && typeof bar.switchPanelFrom === "function" ? bar.switchPanelFrom(root, direction) : false
@@ -54,6 +93,38 @@ Ui.BarWidget {
   SystemClock {
     precision: SystemClock.Minutes
     onDateChanged: if (root.opened) root.refresh()
+  }
+
+  Process {
+    id: catalogReader
+    command: ["python3", root.scriptPath, "--catalog"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var data = JSON.parse(text)
+          if (!Array.isArray(data.choices) || !Array.isArray(data.defaults)) throw new Error("Invalid catalog")
+          root.catalog = data
+        } catch (error) { root.editorError = "Could not load timezones. Close and try again." }
+      }
+    }
+    onExited: function(code, status) {
+      if (code !== 0 || status !== 0) root.editorError = "Could not load timezones. Check Python and tzdata."
+    }
+  }
+
+  Process {
+    id: saver
+    stdout: StdioCollector { onStreamFinished: root.saveReply = text.trim() }
+    onExited: function(code, status) {
+      if (code !== 0 || status !== 0 || root.saveReply !== "ok") {
+        root.editorError = "Could not save cities. Your saved list is unchanged; try again."
+        return
+      }
+      var updated = Object.assign({}, root.settings)
+      updated.zones = root.pendingZones
+      root.settings = updated
+      if (root.opened) root.open()
+    }
   }
 
   Process {
@@ -85,9 +156,9 @@ Ui.BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󱉊"
-    tooltipText: "Omarchy World Clock · Right-click for 12/24-hour time"
+    tooltipText: "World Clock"
     onPressed: function(mouseButton) {
-      if (mouseButton === Qt.RightButton) root.toggleHourFormat()
+      if (mouseButton === Qt.RightButton) root.showMenu()
       else if (mouseButton === Qt.LeftButton) root.toggle()
     }
   }
@@ -105,24 +176,88 @@ Ui.BarWidget {
     bar: root.bar
     owner: root
     open: root.opened
-    padding: Style.space(16)
-    contentWidth: fittedContentWidth(Style.space(390))
-    contentHeight: fittedContentHeight(root.clocks.length > 0 && !root.errorText
-      ? root.clocks.length * root.rowHeight : Style.space(76))
+    padding: Style.space(root.panelMode === "menu" ? 8 : 16)
+    // Match tray-app dropdowns (Mektubi, Bitwarden), not the accent panel frame.
+    borderSpec: root.panelMode === "menu"
+      ? Border.localOrSurfaceSpec("popups", "border",
+          Qt.alpha(root.bar ? root.bar.foreground : Color.foreground, 0.45),
+          Color.popups.border, Math.max(1, Style.space(2)))
+      : Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+    contentWidth: fittedContentWidth(Style.space(root.panelMode === "menu" ? 232 : 390))
+    contentHeight: fittedContentHeight(root.panelMode === "menu" ? menu.implicitHeight
+      : root.panelMode === "edit" ? Style.space(500)
+      : root.clocks.length > 0 && !root.errorText ? root.clocks.length * root.rowHeight : Style.space(76))
     focusTarget: keys
 
     Ui.PanelKeyCatcher {
       id: keys
       anchors.fill: parent
+      blocked: root.panelMode !== "clocks"
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
         list.contentY = Math.max(0, Math.min(Math.max(0, list.contentHeight - list.height), list.contentY + dy * root.rowHeight))
       }
 
+      Column {
+        id: menu
+        width: parent.width
+        spacing: 0
+        visible: root.panelMode === "menu"
+        Keys.onEscapePressed: root.close()
+        GhostMenuButton {
+          id: editButton
+          width: parent.width
+          height: Style.space(30)
+          leftAlign: true
+          focusable: true
+          text: "Edit cities…"
+          onClicked: root.editCities()
+          Keys.onDownPressed: formatButton.forceActiveFocus()
+        }
+        GhostMenuButton {
+          id: formatButton
+          width: parent.width
+          height: Style.space(30)
+          leftAlign: true
+          focusable: true
+          text: root.hourFormat === "24h" ? "Use 12-hour time" : "Use 24-hour time"
+          onClicked: root.toggleHourFormat()
+          Keys.onUpPressed: editButton.forceActiveFocus()
+        }
+      }
+
+      Loader {
+        id: editor
+        anchors.fill: parent
+        active: root.opened && root.panelMode === "edit" && root.catalog !== null
+        visible: active
+        sourceComponent: CityEditor {
+          initialZones: root.zones === null ? root.catalog.defaults : root.zones
+          choices: root.catalog.choices
+          saving: saver.running
+          errorText: root.editorError
+          fontFamily: root.uiFont
+          onSaveRequested: function(cities) { root.saveCities(cities) }
+          onCancelRequested: root.open()
+        }
+        onLoaded: item.focusSearch()
+      }
+
       Text {
         anchors.fill: parent
-        visible: root.errorText !== "" || root.clocks.length === 0
+        visible: root.panelMode === "edit" && !editor.active
+        text: root.editorError || "Loading timezones…"
+        color: root.foreground
+        font.family: root.uiFont
+        font.pixelSize: Style.space(14)
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+      }
+
+      Text {
+        anchors.fill: parent
+        visible: root.panelMode === "clocks" && (root.errorText !== "" || root.clocks.length === 0)
         text: root.errorText || (reader.running ? "Reading clocks…" : "No cities configured")
         color: root.foreground
         font.family: root.uiFont
@@ -135,11 +270,13 @@ Ui.BarWidget {
       ListView {
         id: list
         anchors.fill: parent
-        visible: root.errorText === ""
+        visible: root.panelMode === "clocks" && root.errorText === ""
         model: root.clocks
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar {
+          policy: ScrollBar.AsNeeded
+        }
 
         delegate: Item {
           id: row

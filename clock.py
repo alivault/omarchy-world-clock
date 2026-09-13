@@ -3,7 +3,7 @@
 import json
 import sys
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 
 DEFAULT_ZONES = [
@@ -13,6 +13,23 @@ DEFAULT_ZONES = [
     {"label": "Istanbul", "zone": "Europe/Istanbul"},
     {"label": "Tokyo", "zone": "Asia/Tokyo"},
 ]
+
+
+def city_catalog():
+    """Offline timezone locations, with useful city aliases for shared zones."""
+    regions = {"Africa", "America", "Antarctica", "Asia", "Atlantic",
+               "Australia", "Europe", "Indian", "Pacific"}
+    choices = [{"label": zone.rsplit("/", 1)[-1].replace("_", " "), "zone": zone}
+               for zone in available_timezones() if zone.split("/")[0] in regions]
+    choices += [
+        {"label": "Home", "zone": ""},
+        {"label": "UTC", "zone": "UTC"},
+        {"label": "Bergen", "zone": "Europe/Oslo"},
+        {"label": "Cupertino", "zone": "America/Los_Angeles"},
+        {"label": "Mumbai", "zone": "Asia/Kolkata"},
+    ]
+    choices.sort(key=lambda city: (city["label"].casefold(), city["zone"]))
+    return {"defaults": DEFAULT_ZONES, "choices": choices}
 
 
 def offset_label(minutes):
@@ -49,6 +66,9 @@ def clocks(zones=None, hour_format="12h", now=None, home_zone=None):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--catalog"]:
+        print(json.dumps(city_catalog(), ensure_ascii=False))
+        raise SystemExit(0)
     zones = json.loads(sys.argv[1]) if len(sys.argv) > 1 else None
     if zones is not None and (not isinstance(zones, list) or not all(isinstance(z, dict) for z in zones)):
         raise SystemExit("zones must be a list of objects with label and zone fields")

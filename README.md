@@ -11,8 +11,26 @@ database (`tzdata`). No pip packages, install hooks, or build steps are needed.
 Clocks refresh on opening and every minute while open, including DST changes.
 Home follows your system timezone. Escape/outside-click closes the panel;
 Tab switches panels; scroll or Up/Down moves through longer lists.
-Right-click the globe to toggle 12/24-hour time. The choice is saved in
-`shell.json` and updates any open clocks without closing the panel.
+Right-click the globe for **Edit cities…** and **Use 12/24-hour time**.
+The time format is saved in `shell.json`.
+
+## Edit cities in the widget
+
+1. Right-click the globe and choose **Edit cities…**.
+2. Search a city or IANA timezone and click **+** (or press Enter) to add it.
+3. Click **×** beside a selected city to remove it. Longer lists scroll.
+4. Drag a city's grip to reorder it. Long lists auto-scroll near the edges.
+   Keyboard: Tab to a grip and use Up/Down. Escape cancels an active drag;
+   dropping outside the list also cancels it.
+5. Choose **Save** to apply the list and order, or **Cancel** / Escape to discard edits.
+
+Search works offline using system timezone locations, not an exhaustive city
+directory. If your city is missing, search for a nearby city sharing its
+timezone; display labels can also be customized in `shell.json`. The catalog
+includes aliases for Bergen, Cupertino, and Mumbai. Already-added entries are
+marked and cannot be added twice. Save preserves other bar settings.
+Lists use native Qt Quick scrolling, including touchpad inertia, without
+intercepting wheel events. Drag-to-reorder auto-scroll remains direct.
 
 ## Install
 
@@ -60,8 +78,9 @@ omarchy plugin remove ali.world-clock
 All time calculations run locally using Python's standard-library `zoneinfo`.
 There are no network requests, credentials, telemetry, privileged operations,
 or persistent background services. A short Python process runs when the panel
-opens and each minute while it is open. Right-click explicitly saves the time
-format through `omarchy bar set`; other user settings are left intact.
+opens and each minute while it is open, and once to load the editor's timezone
+catalog. Settings are saved through Omarchy's bar-settings CLI/IPC only after
+choosing a time format or clicking Save; other user settings are left intact.
 
 ## Development
 
