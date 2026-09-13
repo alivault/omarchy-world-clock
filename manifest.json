@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "ali.world-clock",
+  "name": "Omarchy World Clock",
+  "version": "1.0.0",
+  "author": "Ali",
+  "license": "MIT",
+  "description": "A simple world clock with city names, large times, and local day differences.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Omarchy World Clock",
+    "description": "A quiet, readable list of clocks around the world",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
